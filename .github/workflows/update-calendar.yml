@@ -1,0 +1,65 @@
+name: Update NFL calendar
+
+on:
+  schedule:
+    # 07:15 UTC every day. Catches flex-schedule changes, kickoff-time
+    # adjustments and newly published seasons without any manual work.
+    - cron: "15 7 * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # commit the regenerated .ics (also keeps the cron alive)
+  pages: write
+  id-token: write
+
+concurrency:
+  group: nfl-calendar
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Generate calendar
+        run: python generate_ics.py --out public/nfl.ics
+
+      - name: Sanity check
+        run: |
+          test -s public/nfl.ics
+          grep -q "BEGIN:VCALENDAR" public/nfl.ics
+          grep -q "END:VCALENDAR" public/nfl.ics
+          echo "events: $(grep -c 'BEGIN:VEVENT' public/nfl.ics)"
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/nfl.ics
+          if git diff --cached --quiet; then
+            echo "No schedule changes."
+          else
+            git commit -m "Update NFL calendar ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
